@@ -3,7 +3,7 @@
 import torch
 from torch import DoubleTensor, FloatTensor
 from torch.nn import functional as F
-from torch.nn import Module, ModuleList, Parameter, ParameterList, Tanh
+from torch.nn import Module, ModuleList, Parameter, ParameterList, ReLU, Sigmoid, Tanh
 
 from easynet import functions, init
 
@@ -49,6 +49,33 @@ class Recurrent(Module):
         return functions.expand_leading_as(self.initial_state, x)
 
 
+class StackRecurrent(Module):
+    def __init__(self, layers):
+        super(StackRecurrent, self).__init__()
+        self.layers = ModuleList(layers)
+
+    def initial(self, x):
+        return [layer.initial(x) for layer in self.layers]
+
+    def observe(self, states):
+        return self.layers[-1].observe(states[-1])
+
+    def forward(self, x, states):
+        states_curr = []
+        for i, (layer, state) in enumerate(zip(self.layers, states_prev)):
+            state = layer(x, state)
+            states_curr.append(state)
+            x = layer.observe(state)
+        return states_curr
+
+
+def stack_recurrent(sizes, rnn=None):
+    if len(sizes) < 2:
+        raise ValueError('len(sizes) must be > 2 (got: {})'.format(sizes))
+    rnn = rnn or elman
+    return StackRecurrent([rnn(n_feat, n_hid) for n_feat, n_hid in zip(sizes, sizes[1:])])
+
+
 class Elman(Recurrent):
     def __init__(self, f, g, initial_state=None):
         super(Elman, self).__init__()
@@ -81,8 +108,7 @@ class GRU(Recurrent):
         if initial_state is not None:
             self.initial_state = Parameter(initial_state)
 
-    def forward(self, args):
-        x, h = args
+    def forward(self, x, h):
         r, u = torch.chunk(F.sigmoid(self.f_ru([x, h])), 2, dim=1)
         c = F.tanh(self.f_c([x, r * h]))
         return u * h + (1 - u) * c
@@ -115,8 +141,8 @@ class LSTM(Recurrent):
     
     def initial(self, x):
         return (
-            funcnet.functions.expand_leading_as(self.h0, x),
-            funcnet.functions.expand_leading_as(self.c0, x))
+            functions.expand_leading_as(self.h0, x),
+            functions.expand_leading_as(self.c0, x))
 
     def observe(self, state):
         return state[0]
@@ -142,4 +168,34 @@ def lstm(n_feat, n_hid, initial_state=True):
     initial_state = (FloatTensor(n_hid).zero_(), FloatTensor(n_hid).zero_()) if initial_state else None
     
     return LSTM(f, initial_state)
+
+
+class Multiplicative(Recurrent):
+    """Multiplicative Integration RNN.
+
+    On Multiplicative Integration with Recurrent Neural Networks
+    https://arxiv.org/pdf/1606.06630.pdf
+    """
+    def __init__(self, w, u, a, b, c, d, initial_state, f=None):
+        super(Multiplicative, self).__init__()
+        self.f = f or Tanh()
+        self.w, self.u = w, u
+        self.a, self.b, self.c = a, b, c
+        self.d = d
+        self.initial_state = initial_state
+
+    def forward(self, x, h):
+        wx = x.mm(self.w)
+        uh = h.mm(self.u)
+        g1 = self.a.expand_as(wx) * wx * uh
+        g2 = self.b.expand_as(wx) * wx + self.c.expand_as(uh) * uh
+        h = self.f(g1 + g2 + self.d.expand_as(g1))
+        return h
+
+
+def multiplicative(n_feat, n_hid, f=None):
+    w = Parameter(init.glorot(FloatTensor(n_feat, n_hid)))
+    u = Parameter(init.orthonormal(FloatTensor(n_hid, n_hid), gain=1))
+    a, b, c, d, h0 = [Parameter(FloatTensor(n_hid).zero_()) for i in range(5)]
+    return Multiplicative(w, u, a, b, c, d, h0, f=f)
 
