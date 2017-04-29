@@ -60,7 +60,7 @@ class StackRecurrent(Module):
     def observe(self, states):
         return self.layers[-1].observe(states[-1])
 
-    def forward(self, x, states):
+    def forward(self, x, states_prev):
         states_curr = []
         for i, (layer, state) in enumerate(zip(self.layers, states_prev)):
             state = layer(x, state)

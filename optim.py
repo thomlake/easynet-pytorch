@@ -26,6 +26,7 @@ class TrainingMonitor(object):
     def __init__(self, loss_key='loss', max_epochs=float('inf'), patience=20):
         self.loss_key = loss_key
         self.best_loss = float('inf')
+        self.best_epoch = None
 
         self.max_epochs = max_epochs
         self.epoch = 0
@@ -33,6 +34,7 @@ class TrainingMonitor(object):
         self.patience = patience
         self.frustration = 0
         self.improved = False
+        self.converged = False
 
         self.monitors = defaultdict(list)
         self.start_time = time.time()
@@ -40,17 +42,19 @@ class TrainingMonitor(object):
     def __getitem__(self, key):
         return self.monitors[key]
 
-    def update(self, *kwargs):
-        self.time = time()
+    def update(self, **kwargs):
+        timestamp = time.time()
 
         for key, value in kwargs.items():
-            self.monitors[key].append([self.time, self.epoch, value])
+            self.monitors[key].append([timestamp, self.epoch, value])
+
         try:
             curr_loss = kwargs[self.loss_key]
             if curr_loss < self.best_loss:
                 self.improved = True
                 self.frustration = 0
                 self.best_loss = curr_loss
+                self.best_epoch = self.epoch
             else:
                 self.improved = False
                 self.frustration += 1
